@@ -1,4 +1,4 @@
-// Tests for cmaes.hpp. Exit code 0 = all pass.
+// tests for cmaes.hpp, returns 0 if everything passes
 #include <cmaes/cmaes.hpp>
 
 #include <algorithm>
@@ -41,7 +41,7 @@ static bool throws(const std::function<void()>& fn) {
   return false;
 }
 
-// ---- test functions ------------------------------------------------------------------------
+// ---- test functions ----
 
 static double sphere(const VectorXd& x) { return x.squaredNorm(); }
 
@@ -57,7 +57,7 @@ static double rastrigin(const VectorXd& x) {
   return s;
 }
 
-// A random rotation, from the QR decomposition of a Gaussian matrix.
+// random rotation via QR of a gaussian matrix
 static MatrixXd random_rotation(int n, std::uint64_t seed) {
   cmaes::detail::Rng rng(seed);
   MatrixXd A(n, n);
@@ -67,10 +67,10 @@ static MatrixXd random_rotation(int n, std::uint64_t seed) {
   return qr.householderQ() * MatrixXd::Identity(n, n);
 }
 
-// ---- tests ---------------------------------------------------------------------------------
+// ---- tests ----
 
-// Default strategy parameters against the tutorial formulas, evaluated separately in Python. n = 3
-// and n = 40 have an odd lambda, where the weights use ln((lambda + 1) / 2).
+// expected values computed separately in python from the tutorial formulas
+// (n = 3 and 40 have odd lambda)
 static void test_default_parameters() {
   struct Row { int n, lambda, mu; double w1, mueff, cc, cs, c1, cmu, damps, chiN; };
   const Row rows[] = {
@@ -128,8 +128,7 @@ static void test_sphere() {
   }
 }
 
-// CMA-ES learns the inverse Hessian: on a rotated ellipsoid with condition 1e6 the final C should
-// have about the same condition number and the same principal axes.
+// rotated ellipsoid, cond 1e6. C should end up ~ inverse Hessian
 static void test_rotated_ellipsoid() {
   const int n = 10;
   const MatrixXd Q = random_rotation(n, 3);
@@ -149,8 +148,7 @@ static void test_rotated_ellipsoid() {
   Eigen::SelfAdjointEigenSolver<MatrixXd> eig(es.cov());
   const double cond = eig.eigenvalues().maxCoeff() / eig.eigenvalues().minCoeff();
   CHECK(cond > 1e5 && cond < 1e7, "condition of C %.3g (Hessian 1e6)", cond);
-  // C should be close to a multiple of the inverse Hessian H^-1: H^(1/2) C H^(1/2) is then close
-  // to a multiple of I. It starts at condition 1e6 (C = I).
+  // if C ~ H^-1 then H^(1/2) C H^(1/2) ~ c*I (starts at cond 1e6)
   const MatrixXd Hhalf = Q.transpose() * scale.cwiseSqrt().asDiagonal() * Q;
   Eigen::SelfAdjointEigenSolver<MatrixXd> fit(Hhalf * es.cov() * Hhalf);
   const double mismatch = fit.eigenvalues().maxCoeff() / fit.eigenvalues().minCoeff();
@@ -192,7 +190,7 @@ static void test_determinism() {
   CHECK(!(a.x == c.x), "a different seed gives a different run");
 }
 
-// Only the ranking of f matters, so a strictly increasing transform of f gives the same run.
+// only ranks matter, so a monotone transform of f should give the exact same run
 static void test_rank_invariance() {
   const int n = 8;
   cmaes::Options opt;
@@ -210,7 +208,7 @@ static void test_rank_invariance() {
   CHECK(a.mean() == b.mean() && a.sigma() == b.sigma() && a.cov() == b.cov(), "f and exp(sqrt(f)) - 5 give the same run");
 }
 
-// The optimum (x = 2) is outside the box [-1, 1]^n, so the answer is the corner x = 1.
+// optimum at x = 2 is outside [-1, 1]^n so the answer should be the corner x = 1
 static void test_bounds() {
   const int n = 6;
   for (auto mode : {cmaes::BoundHandling::Mirror, cmaes::BoundHandling::ClampPenalty}) {
@@ -232,7 +230,7 @@ static void test_bounds() {
     CHECK((r.mean - VectorXd::Ones(n)).norm() < 1e-6, "%s: |mean - 1| %.3g", name, (r.mean - VectorXd::Ones(n)).norm());
     CHECK(evals == r.evaluations, "%s: evaluation count %lld vs %lld", name, evals, r.evaluations);
   }
-  // An interior optimum is found exactly as without bounds.
+  // optimum inside the box
   cmaes::Options opt;
   opt.lower = VectorXd::Constant(4, -10.0);
   opt.upper = VectorXd::Constant(4, 10.0);
@@ -240,8 +238,8 @@ static void test_bounds() {
   CHECK(r.f < 1e-10, "interior optimum with bounds: f %.3g", r.f);
 }
 
-// Mirror leaves points inside the box exactly as sampled, and reflects the others. A bounded run
-// and an unbounded twin with the same seed, told the same f, sample the same raw points.
+// mirror shouldn't touch points already inside, and should reflect the rest correctly.
+// compare against an unbounded twin with the same seed that gets told the same f
 static double reflect(double x, double lo, double up) {
   while (x < lo || x > up) x = x < lo ? 2.0 * lo - x : 2.0 * up - x;
   return x;
@@ -253,7 +251,7 @@ static void test_mirror() {
     cmaes::Options ob;
     ob.lower = VectorXd::Constant(n, -width / 2);
     ob.upper = VectorXd::Constant(n, width / 2);
-    const double sigma0 = width == 1.0 ? 3.0 : 1e-3;  // far outside the box / never near it
+    const double sigma0 = width == 1.0 ? 3.0 : 1e-3;  // way outside the box / never near the edge
     const VectorXd x0 = VectorXd::Constant(n, 0.123456789012345);
     cmaes::CMAES bounded(x0, sigma0, ob), free(x0, sigma0);
     double worst = 0;
@@ -298,36 +296,36 @@ static void test_stops() {
   r = cmaes::minimize(sphere, VectorXd::Constant(5, 3.0), 1.0, opt);
   CHECK(r.stop == cmaes::Stop::MaxIter && r.iterations == 7, "stop %s after %d", cmaes::to_string(r.stop), r.iterations);
 
-  // A linear f has no minimum: sigma keeps growing until TolUpSigma.
+  // linear f has no min, sigma keeps growing
   opt = cmaes::Options();
   opt.tol_up_sigma = 1e6;
   r = cmaes::minimize([](const VectorXd& x) { return x.sum(); }, VectorXd::Zero(3), 1.0, opt);
   CHECK(r.stop == cmaes::Stop::TolUpSigma, "linear f: stop %s", cmaes::to_string(r.stop));
 
-  // A flat f: TolFun.
+  // flat f
   r = cmaes::minimize([](const VectorXd&) { return 1.0; }, VectorXd::Zero(3), 1.0);
   CHECK(r.stop == cmaes::Stop::TolFun, "flat f: stop %s after %d", cmaes::to_string(r.stop), r.iterations);
 
-  // A constant +inf or NaN f is flat too.
+  // all inf / all NaN should count as flat too
   r = cmaes::minimize([](const VectorXd&) { return std::numeric_limits<double>::infinity(); }, VectorXd::Zero(3), 1.0);
   CHECK(r.stop == cmaes::Stop::TolFun && r.iterations < 100, "+inf f: stop %s after %d", cmaes::to_string(r.stop), r.iterations);
   r = cmaes::minimize([](const VectorXd&) { return std::nan(""); }, VectorXd::Zero(3), 1.0);
   CHECK(r.stop == cmaes::Stop::TolFun && r.iterations < 100, "NaN f: stop %s after %d", cmaes::to_string(r.stop), r.iterations);
   CHECK(r.x == VectorXd::Zero(3) && std::isinf(r.f), "NaN f: best is x0 with f = inf");
 
-  // With tol_fun off, the sphere stops on TolX.
+  // tol_fun off -> tolx
   opt = cmaes::Options();
   opt.tol_fun = 0;
   r = cmaes::minimize(sphere, VectorXd::Constant(5, 1.0), 1.0, opt);
   CHECK(r.stop == cmaes::Stop::TolX, "tol_fun 0: stop %s", cmaes::to_string(r.stop));
 
-  // An ellipsoid with condition 1e6 against max_condition 1e4: ConditionCov.
+  // cond 1e6 problem vs max_condition 1e4
   opt = cmaes::Options();
   opt.max_condition = 1e4;
   r = cmaes::minimize([](const VectorXd& x) { return x[0] * x[0] + 1e6 * x[1] * x[1] + x[2] * x[2]; }, VectorXd::Constant(3, 1.0), 1.0, opt);
   CHECK(r.stop == cmaes::Stop::ConditionCov, "ill-conditioned: stop %s", cmaes::to_string(r.stop));
 
-  // With tol_fun and tol_x off, the step size shrinks until it no longer moves the mean.
+  // tol_fun and tol_x off: sigma shrinks until it stops moving the mean
   opt = cmaes::Options();
   opt.tol_fun = 0;
   opt.tol_x = 1e-300;
@@ -337,14 +335,14 @@ static void test_stops() {
                       VectorXd::Zero(3), 1.0, opt);
   CHECK(r.stop == cmaes::Stop::NoEffectCoord, "stop %s (expected no effect coordinate)", cmaes::to_string(r.stop));
 
-  // max_evals is shared by the restarts.
+  // max_evals budget is shared across restarts
   opt = cmaes::Options();
   opt.restarts = 50;
   opt.max_evals = 3000;
   r = cmaes::minimize(rastrigin, VectorXd::Constant(10, 3.0), 2.0, opt);
   CHECK(r.evaluations >= 3000 && r.evaluations < 3000 + r.lambda, "evaluations %lld over %d restarts", r.evaluations, r.restarts);
 
-  // sigma_max caps the step size.
+  // sigma_max
   opt = cmaes::Options();
   opt.sigma_max = 0.3;
   opt.max_iter = 50;
@@ -360,7 +358,7 @@ static void test_stops() {
   CHECK(smax <= 0.3, "sigma %.3g with sigma_max 0.3", smax);
 }
 
-// NaN counts as worst: half the space returns NaN and the run still converges on the other half.
+// half the space returns NaN, should still converge on the other half
 static void test_nan() {
   auto f = [](const VectorXd& x) { return x[0] < 0 ? std::nan("") : (x.array() - 1.0).square().sum(); };
   const cmaes::Result r = cmaes::minimize(f, VectorXd::Constant(4, 0.5), 0.5);
@@ -368,7 +366,7 @@ static void test_nan() {
   CHECK(!std::isnan(r.f), "best f is not NaN");
 }
 
-// A noisy f, as in a Monte Carlo objective: the mean ends near the optimum.
+// noisy f (like a monte carlo sim), mean should end up near the optimum
 static void test_noisy() {
   const int n = 5;
   cmaes::detail::Rng noise(77);
@@ -380,7 +378,7 @@ static void test_noisy() {
   CHECK(r.mean.norm() < 0.2, "|mean| %.3g with noise sd 0.01", r.mean.norm());
 }
 
-// Common random numbers: every point of a generation sees the same noise draw.
+// common random numbers: whole generation gets the same noise
 static void test_batch() {
   const int n = 4;
   cmaes::Options opt;
@@ -389,7 +387,7 @@ static void test_batch() {
   const cmaes::Result r = cmaes::minimize_batch(
       [&](const std::vector<VectorXd>& X) {
         cmaes::detail::Rng draw(1000 + gen++);
-        const double shift = 0.5 * draw.normal();  // same for the whole generation, so the ranking ignores it
+        const double shift = 0.5 * draw.normal();  // same for everyone so ranking ignores it
         std::vector<double> v;
         for (const auto& x : X) v.push_back(x.squaredNorm() + shift);
         return v;
@@ -447,12 +445,12 @@ static void test_arguments() {
   cmaes::CMAES es3(x0, 1.0, opt);
   while (!es3.done()) es3.tell(std::vector<double>(es3.ask().size(), 1.0));
   CHECK(throws<std::logic_error>([&] { es3.ask(); }), "ask after the run stopped");
-  // every f +inf: best_x is a point that was evaluated
+  // all +inf: best_x should still be a point we actually evaluated
   cmaes::CMAES es4(x0, 1.0);
   const std::vector<VectorXd> X4 = es4.ask();
   es4.tell(std::vector<double>(X4.size(), std::numeric_limits<double>::infinity()));
   CHECK(es4.best_x() == X4[0] && std::isinf(es4.best_f()), "all +inf: best_x is the first evaluated point");
-  // C stays exactly symmetric
+  // C should stay exactly symmetric
   cmaes::CMAES es5(VectorXd::Constant(12, 1.0), 1.0);
   bool symmetric = true;
   for (int g = 0; g < 50; ++g) {

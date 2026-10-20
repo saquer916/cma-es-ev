@@ -1,15 +1,5 @@
-// CMA-ES: Covariance Matrix Adaptation Evolution Strategy. Header-only, C++17 + Eigen 3.3 or newer.
-//
-// Minimizes f: R^n -> R using only the ranking of f values, so it copes with noisy, non-smooth and
-// badly scaled problems. The update equations and default parameters follow
-//   N. Hansen, "The CMA Evolution Strategy: A Tutorial", arXiv:1604.00772,
-// with positive recombination weights only (no active CMA).
-//
-//   cmaes::Options opt;
-//   cmaes::Result r = cmaes::minimize([](const Eigen::VectorXd& x) { return x.squaredNorm(); },
-//                                     Eigen::VectorXd::Constant(10, 3.0), 1.0, opt);
-//
-// or drive it yourself with ask() / tell() (see CMAES below).
+// CMA-ES in one header (C++17 + Eigen)
+// follows Hansen's tutorial: https://arxiv.org/abs/1604.00772 (positive weights only, no active CMA)
 #pragma once
 
 #include <Eigen/Dense>
@@ -31,18 +21,17 @@ namespace cmaes {
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
-// Why a run stopped. None means it is still running.
 enum class Stop {
   None,
-  TargetReached,  // best f <= f_target
-  MaxEvals,       // max_evals evaluations used
-  MaxIter,        // max_iter generations done
-  TolFun,         // best f of recent generations and every f of the last one span less than tol_fun
-  TolX,           // sigma * |pc_i| and sigma * sqrt(C_ii) below tol_x in every coordinate
-  TolUpSigma,     // sigma / sigma0 > tol_up_sigma * sqrt(largest eigenvalue of C): sigma0 too small, or f unbounded
-  ConditionCov,   // condition number of C above max_condition
-  NoEffectAxis,   // a 0.1-standard-deviation step along a principal axis no longer changes the mean
-  NoEffectCoord,  // a 0.2-standard-deviation step in some coordinate no longer changes the mean
+  TargetReached,
+  MaxEvals,
+  MaxIter,
+  TolFun,
+  TolX,
+  TolUpSigma,  // sigma blew up: sigma0 too small or f has no minimum
+  ConditionCov,
+  NoEffectAxis,
+  NoEffectCoord,
 };
 
 inline const char* to_string(Stop s) {
@@ -61,43 +50,36 @@ inline const char* to_string(Stop s) {
   return "unknown";
 }
 
-// How box bounds are enforced. Either way, every point handed to f lies inside the box.
+// either way f only ever sees points inside the box
 enum class BoundHandling {
-  // The search runs unbounded and each sample is reflected back into the box before it is
-  // evaluated (period 2 * (upper - lower)). Needs no tuning, and works whatever the scale of f.
-  Mirror,
-  // Each sample is clamped into the box before it is evaluated, and for ranking only
-  //   penalty_weight * sum_i ((x_i - clamped_i) / (upper_i - lower_i))^2
-  // is added to its f. The penalty has to be large next to the differences in f near the bound.
-  ClampPenalty,
+  Mirror,        // reflect samples back in
+  ClampPenalty,  // clamp, then add penalty_weight * (scaled distance outside)^2 when ranking
 };
 
 struct Options {
-  int lambda = 0;                  // samples per generation; 0 = 4 + floor(3 ln n)
-  int mu = 0;                      // parents recombined into the new mean; 0 = lambda / 2
-  std::uint64_t seed = 1;          // same seed, same f -> same run (same machine, compiler and flags: -march=native or -mfma change it)
-  int max_iter = 0;                // 0 = 100 + 150 (n + 3)^2 / sqrt(lambda)
-  long long max_evals = 0;         // 0 = no limit (minimize() shares it across restarts)
+  int lambda = 0;                  // 0 = 4 + floor(3 ln n)
+  int mu = 0;                      // 0 = lambda / 2
+  std::uint64_t seed = 1;
+  int max_iter = 0;                // 0 = 100 + 150 (n+3)^2 / sqrt(lambda)
+  long long max_evals = 0;         // 0 = no limit
   double f_target = -std::numeric_limits<double>::infinity();
   double tol_fun = 1e-12;
   double tol_x = 0;                // 0 = 1e-12 * sigma0
   double tol_up_sigma = 1e20;
   double max_condition = 1e14;
-  double sigma_max = std::numeric_limits<double>::infinity();  // cap on the step size, > 0
-  VectorXd lower, upper;           // box bounds, both finite, or both empty for none
+  double sigma_max = std::numeric_limits<double>::infinity();
+  VectorXd lower, upper;           // leave empty for no bounds
   BoundHandling bound_handling = BoundHandling::Mirror;
-  double penalty_weight = 1.0;     // ClampPenalty only; finite and >= 0
-  int restarts = 0;                // minimize() only: IPOP restarts after a stop other than target or evals
-  double ipop_factor = 2.0;        // minimize() only: lambda grows by this factor on each restart
+  double penalty_weight = 1.0;     // ClampPenalty only
+  int restarts = 0;                // IPOP restarts, minimize() only
+  double ipop_factor = 2.0;
 };
 
 namespace detail {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// Standard normal samples from mt19937_64 (fully specified by the C++ standard) through our own
-// uniform and Box-Muller transform, so the samples do not depend on how a standard library
-// implements std::normal_distribution.
+// own Box-Muller so runs don't depend on the std lib's normal_distribution
 class Rng {
  public:
   explicit Rng(std::uint64_t seed) : g_(seed) {}
@@ -123,18 +105,7 @@ inline int default_lambda(int n) { return 4 + static_cast<int>(std::floor(3.0 * 
 
 }  // namespace detail
 
-// One CMA-ES run, driven with ask() and tell():
-//
-//   cmaes::CMAES es(x0, sigma0, opt);
-//   while (!es.done()) {
-//     const std::vector<Eigen::VectorXd>& X = es.ask();
-//     std::vector<double> f(X.size());
-//     for (size_t k = 0; k < X.size(); ++k) f[k] = objective(X[k]);   // in any order, in parallel, ...
-//     es.tell(f);
-//   }
-//   use es.best_x(), or es.mean() when f is noisy
-//
-// After a stop, ask() throws std::logic_error: start a new CMAES to search on.
+// usage: while (!es.done()) { auto& X = es.ask(); ...score each x...; es.tell(f); }
 class CMAES {
  public:
   CMAES(const VectorXd& x0, double sigma0, const Options& opt = Options())
@@ -160,8 +131,7 @@ class CMAES {
     if (lambda_ < 2) throw std::invalid_argument("cmaes: lambda must be at least 2");
     if (mu_ < 1 || mu_ > lambda_) throw std::invalid_argument("cmaes: mu must be between 1 and lambda");
 
-    // Recombination weights w_i = ln((lambda + 1) / 2) - ln(i) (tutorial eq. 49), or ln(mu + 1/2) - ln(i)
-    // when mu is set by the user, normalized to sum 1.
+    // weights (tutorial eq. 49), ln(mu + 1/2) base if mu was set by hand
     w_.resize(mu_);
     const double wbase = opt.mu > 0 ? mu_ + 0.5 : (lambda_ + 1) / 2.0;
     for (int i = 0; i < mu_; ++i) w_[i] = std::log(wbase) - std::log(i + 1.0);
@@ -192,8 +162,6 @@ class CMAES {
     best_x_ = x0;
   }
 
-  // Samples lambda new points (inside the bounds, if any) and returns them for evaluation.
-  // A second ask() before tell() replaces the first batch.
   const std::vector<VectorXd>& ask() {
     if (done()) throw std::logic_error("cmaes: ask() after the run stopped");
     Y_.assign(L_, VectorXd(n_));
@@ -212,8 +180,7 @@ class CMAES {
     return X_;
   }
 
-  // Takes f for the points of the last ask(), in the same order, and updates the distribution.
-  // NaN is ranked like +inf, after every finite value.
+  // f in the same order as ask(). NaN counts as +inf
   void tell(const std::vector<double>& f) {
     if (!asked_) throw std::logic_error("cmaes: tell() needs a matching ask()");
     if (f.size() != L_) throw std::invalid_argument("cmaes: tell() needs one f per asked point");
@@ -234,19 +201,19 @@ class CMAES {
     std::iota(idx.begin(), idx.end(), std::size_t{0});
     std::stable_sort(idx.begin(), idx.end(), [&](std::size_t a, std::size_t b) { return fr[a] < fr[b]; });
 
-    // Mean: m <- m + sigma * sum w_i y_i:lambda
+    // mean
     VectorXd yw = VectorXd::Zero(n_);
     for (int i = 0; i < mu_; ++i) yw += w_[i] * Y_[idx[static_cast<std::size_t>(i)]];
     m_ += sigma_ * yw;
 
-    // Evolution paths. C^(-1/2) yw = B D^-1 B^T yw.
+    // evolution paths
     const VectorXd Cinvhalf_yw = B_ * (B_.transpose() * yw).cwiseQuotient(D_);
     ps_ = (1.0 - cs_) * ps_ + std::sqrt(cs_ * (2.0 - cs_) * mueff_) * Cinvhalf_yw;
     const double ps_norm = ps_.norm();
     const bool hsig = ps_norm / std::sqrt(1.0 - std::pow(1.0 - cs_, 2.0 * iter_)) < (1.4 + 2.0 / (n_ + 1.0)) * chiN_;
     pc_ = (1.0 - cc_) * pc_ + (hsig ? std::sqrt(cc_ * (2.0 - cc_) * mueff_) : 0.0) * yw;
 
-    // Covariance: rank-one update from pc plus rank-mu update from the mu best steps.
+    // covariance: rank-one + rank-mu
     MatrixXd rank_mu = MatrixXd::Zero(n_, n_);
     for (int i = 0; i < mu_; ++i) {
       const VectorXd& y = Y_[idx[static_cast<std::size_t>(i)]];
@@ -254,13 +221,13 @@ class CMAES {
     }
     const double dh = hsig ? 0.0 : cc_ * (2.0 - cc_);
     C_ = (1.0 - c1_ - cmu_ + c1_ * dh) * C_ + c1_ * pc_ * pc_.transpose() + cmu_ * rank_mu;
-    C_ = (0.5 * (C_ + C_.transpose())).eval();  // eval(): C_ is on both sides
+    C_ = (0.5 * (C_ + C_.transpose())).eval();  // need eval() here, aliasing
 
-    // Step size: cumulative step-size adaptation.
+    // step size (CSA)
     sigma_ *= std::exp((cs_ / damps_) * (ps_norm / chiN_ - 1.0));
     sigma_ = std::min(sigma_, opt_.sigma_max);
 
-    // Eigendecomposition of C, every generation or so; O(n^3), so skipped while C changes little.
+    // eigendecomposition is O(n^3), only redo it every few gens
     bool degenerate = false;
     if (static_cast<double>(evals_ - eigen_evals_) > lambda_ / (c1_ + cmu_) / n_ / 10.0) {
       eigen_evals_ = evals_;
@@ -271,8 +238,7 @@ class CMAES {
       D_ = ev.cwiseMax(1e-300).cwiseSqrt();
     }
 
-    // Termination. TolFun, TolX, ConditionCov, NoEffectAxis and NoEffectCoord follow the tutorial's
-    // appendix B.3; TolUpSigma is pycma's tolupsigma. B.3's TolXUp and Stagnation are not implemented.
+    // stop checks (tutorial appendix B.3, tolupsigma is from pycma)
     best_hist_.push_back(fr[idx[0]]);
     if (static_cast<int>(best_hist_.size()) > hist_len_) best_hist_.pop_front();
     const double cond = (D_.maxCoeff() / D_.minCoeff()) * (D_.maxCoeff() / D_.minCoeff());
@@ -291,10 +257,9 @@ class CMAES {
   bool done() const { return stop_ != Stop::None; }
   Stop stop() const { return stop_; }
 
-  // The mean of the search distribution, inside the bounds. With a noisy f this is the better
-  // estimate of the optimum: best_x() is the luckiest sample, not the best point.
+  // use mean() over best_x() when f is noisy
   VectorXd mean() const { return to_box(m_); }
-  const VectorXd& best_x() const { return best_x_; }  // best point evaluated so far (x0 until some f is not NaN)
+  const VectorXd& best_x() const { return best_x_; }  // x0 until a non-NaN f comes back
   double best_f() const { return best_f_; }
 
   int dim() const { return n_; }
@@ -315,15 +280,14 @@ class CMAES {
   double chiN() const { return chiN_; }
 
  private:
-  // The point inside the box that a sample at x is evaluated at.
   VectorXd to_box(const VectorXd& x) const {
     if (!bounded_) return x;
     if (opt_.bound_handling == BoundHandling::ClampPenalty) return x.cwiseMax(opt_.lower).cwiseMin(opt_.upper);
     VectorXd y = x;
     for (int i = 0; i < n_; ++i) {
       const double lo = opt_.lower[i], up = opt_.upper[i], r = up - lo;
-      if (x[i] >= lo && x[i] <= up) continue;  // inside: unchanged
-      // Distance past the bound that was crossed, modulo the period 2r, reflected from that bound.
+      if (x[i] >= lo && x[i] <= up) continue;  // already inside
+      // reflect off the bound it crossed (period 2r)
       const bool below = x[i] < lo;
       const double t = std::fmod(below ? lo - x[i] : x[i] - up, 2.0 * r);
       const double v = t <= r ? (below ? lo + t : up - t) : (below ? up - (t - r) : lo + (t - r));
@@ -337,12 +301,12 @@ class CMAES {
     double lo = std::numeric_limits<double>::infinity(), hi = -lo;
     for (double v : best_hist_) lo = std::min(lo, v), hi = std::max(hi, v);
     for (double v : fr) lo = std::min(lo, v), hi = std::max(hi, v);
-    return (hi == lo ? 0.0 : hi - lo) < opt_.tol_fun;  // all-equal counts as 0, also when every f is inf
+    return (hi == lo ? 0.0 : hi - lo) < opt_.tol_fun;  // hi == lo so all-inf counts as flat
   }
 
   Options opt_;
   int n_, lambda_ = 0, mu_ = 0, max_iter_ = 0, hist_len_ = 0;
-  std::size_t L_ = 0;  // lambda_ as a size
+  std::size_t L_ = 0;  // lambda_ as size_t
   bool bounded_ = false, asked_ = false, has_best_ = false;
   double sigma0_, sigma_, tol_x_ = 0;
   double mueff_ = 0, cc_ = 0, cs_ = 0, c1_ = 0, cmu_ = 0, damps_ = 0, chiN_ = 0;
@@ -359,20 +323,18 @@ class CMAES {
 };
 
 struct Result {
-  VectorXd x;             // best point evaluated, over all restarts
+  VectorXd x;             // best point found
   double f = std::numeric_limits<double>::infinity();
-  VectorXd mean;          // final mean of the last run (use this when f is noisy)
-  Stop stop = Stop::None; // why the last run stopped
-  int iterations = 0;     // generations, over all restarts
+  VectorXd mean;          // final mean, use this if f is noisy
+  Stop stop = Stop::None;
+  int iterations = 0;
   long long evaluations = 0;
-  int restarts = 0;       // restarts actually done
-  int lambda = 0;         // population size of the last run
+  int restarts = 0;
+  int lambda = 0;         // pop size of the last run
 };
 
-// Minimizes a batch objective: fb(const std::vector<VectorXd>& X) returns one f per point.
-// Use it to evaluate a generation in parallel, or on shared random draws (common random numbers).
-// With opt.restarts > 0 it restarts from x0 with a larger population (IPOP-CMA-ES) after any stop
-// except TargetReached and MaxEvals.
+// fb scores a whole generation at once (threads, common random numbers, ...)
+// restarts > 0 = IPOP: rerun from x0 with a bigger population
 template <class BatchF>
 Result minimize_batch(BatchF&& fb, const VectorXd& x0, double sigma0, const Options& opt = Options()) {
   if (x0.size() < 1) throw std::invalid_argument("cmaes: x0 must have at least one coordinate");
@@ -383,7 +345,7 @@ Result minimize_batch(BatchF&& fb, const VectorXd& x0, double sigma0, const Opti
   for (int k = 0; k <= opt.restarts; ++k) {
     Options o = opt;
     o.lambda = lambda;
-    // A user-set mu keeps its share of lambda; on the first run it is passed through, so CMAES checks it.
+    // keep a custom mu proportional to lambda
     if (opt.mu > 0) o.mu = std::max(1, static_cast<int>(std::lround(static_cast<double>(opt.mu) * lambda / lambda0)));
     o.seed = opt.seed + std::uint64_t{0x9E3779B97F4A7C15ULL} * static_cast<std::uint64_t>(k);
     if (opt.max_evals > 0) {
@@ -414,7 +376,7 @@ Result minimize_batch(BatchF&& fb, const VectorXd& x0, double sigma0, const Opti
   return r;
 }
 
-// Minimizes f(const VectorXd&) -> double, one point at a time.
+// same thing, one point at a time
 template <class F>
 Result minimize(F&& f, const VectorXd& x0, double sigma0, const Options& opt = Options()) {
   return minimize_batch(

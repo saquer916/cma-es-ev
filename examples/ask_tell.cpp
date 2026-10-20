@@ -1,13 +1,10 @@
-// Tune the constants of a noisy simulation with ask/tell:
-//  - each generation is evaluated in parallel, one thread per candidate;
-//  - every candidate in a generation runs the same random trials (common random numbers), so the
-//    ranking compares the designs rather than their luck, and each generation draws new trials so
-//    the search cannot overfit one set;
-//  - the search runs in the unit box and each coordinate is scaled to its real range.
+// tuning 2 constants of a noisy sim with ask/tell
+// toy model: cart drives 8 m, brakes at some distance before the target, slides to a stop.
+// floor friction is random per trial. cost = 100 * |miss in m| + time in s
 //
-// Toy model: a cart drives 8 m at a cruise speed, starts braking at some distance before the
-// target, and slides to a stop on a floor whose friction varies from trial to trial.
-// Cost = 100 * |miss in m| + time in s, averaged over the trials.
+// every candidate in a generation runs the same trials (common random numbers) so the ranking
+// compares designs and not luck. new trials each generation so it can't overfit one set.
+// search is in [0,1]^2 and each coordinate gets scaled to its real range
 #include <cmaes/cmaes.hpp>
 
 #include <algorithm>
@@ -48,7 +45,7 @@ int main() {
 
   while (!es.done()) {
     const std::vector<Eigen::VectorXd>& X = es.ask();
-    const std::uint64_t seed = 1000003ULL * static_cast<std::uint64_t>(es.iterations());  // new trials each generation
+    const std::uint64_t seed = 1000003ULL * static_cast<std::uint64_t>(es.iterations());  // new trials every gen
     std::vector<double> f(X.size());
     std::vector<std::thread> pool;
     for (size_t k = 0; k < X.size(); ++k) pool.emplace_back([&, k] { f[k] = mean_cost(X[k], seed, trials); });
@@ -60,8 +57,7 @@ int main() {
     }
   }
 
-  // With a noisy cost, the mean of the distribution is the answer; best_x() is just the luckiest sample.
-  // Score it on trials the search never saw.
+  // noisy cost, so use the mean (best_x is just the luckiest sample) and check it on fresh trials
   const Eigen::VectorXd x = es.mean();
   std::printf("\nstopped on %s after %d generations\n", cmaes::to_string(es.stop()), es.iterations());
   for (int i = 0; i < 2; ++i) std::printf("  %-20s %.4f\n", kRanges[i].name, decode(x, i));

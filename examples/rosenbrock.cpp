@@ -1,6 +1,4 @@
-// Minimize the 10-D Rosenbrock function, restarting with a bigger population if a run gets stuck.
-// Restarts go on until f_target is reached, max_evals is used up, or all restarts are done, so set
-// f_target when you know how good the optimum is.
+// 10-D rosenbrock with restarts. set f_target or it keeps restarting even after it solves it
 #include <cmaes/cmaes.hpp>
 
 #include <cmath>

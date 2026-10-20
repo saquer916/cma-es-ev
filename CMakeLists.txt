@@ -5,7 +5,7 @@ if(NOT TARGET Eigen3::Eigen)
   find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 endif()
 
-# Header-only: link cmaes::cmaes to get the include path, Eigen and C++17.
+# header-only, just link cmaes::cmaes
 add_library(cmaes INTERFACE)
 add_library(cmaes::cmaes ALIAS cmaes)
 target_include_directories(cmaes INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)

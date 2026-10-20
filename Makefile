@@ -1,6 +1,5 @@
-# cmaes is header-only: add include/ to your include path and you are done.
-# This Makefile builds the tests and examples and runs the tests:  make test   (needs Eigen 3.3+)
-# If Eigen is somewhere else:  make test EIGEN=/opt/homebrew/include/eigen3
+# header-only, this just builds the tests + examples
+# eigen somewhere else? make test EIGEN=/opt/homebrew/include/eigen3
 CXX ?= g++
 EIGEN ?= $(patsubst -I%,%,$(firstword $(shell pkg-config --cflags-only-I eigen3 2>/dev/null) -I/usr/include/eigen3))
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -pedantic
